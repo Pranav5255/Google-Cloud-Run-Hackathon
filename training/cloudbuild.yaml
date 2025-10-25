@@ -1,0 +1,16 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: 
+      - 'build'
+      - '--build-arg'
+      - 'HF_TOKEN=$_HF_TOKEN'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/lora-trainer:v5-gemma'
+      - '.'
+  - name: 'gcr.io/cloud-builders/docker'
+    args: 
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/lora-trainer:v5-gemma'
+timeout: 1800s
+options:
+  machineType: 'E2_HIGHCPU_8'
