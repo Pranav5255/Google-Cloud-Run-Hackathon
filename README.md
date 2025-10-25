@@ -1,4 +1,4 @@
-# Production-Grade LoRA Fine-Tuning Platform on Cloud Run
+# AdaptML: Production-Grade LoRA Fine-Tuning Platform on Cloud Run
 
 A serverless platform for fine-tuning Large Language Models using LoRA/QLoRA on Google Cloud Run with GPU acceleration.
 
@@ -14,52 +14,10 @@ A serverless platform for fine-tuning Large Language Models using LoRA/QLoRA on 
 
 ## 🏗️ Architecture
 
-```bash
-┌─────────────────────┐
-│ Web Browser         │
-│ (User)              │
-└──────┬──────────────┘
-       │
-       ▼
-┌─────────────────────────────────┐
-│ Streamlit Dashboard             │
-│ (Cloud Run Service)             │
-│ - Interactive UI                │
-│ - Job Submission Form           │
-│ - Real-time Job Status          |
-│ - Status Monitoring             │
-└──────┬──────────────────────────┘
- REST API Calls
-       │
-       ▼
-┌─────────────────────────────────┐
-│ Flask API Service               │
-│ (Cloud Run Service)             │
-│ - /train - Submit jobs          │
-│ - /status - Check progress      │
-│ - /models - List trained        │
-└──────┬──────────────────────────┘
- Trigger Cloud Run Job
-       │
-       ▼
-┌─────────────────────────────────┐
-│ Training Worker                 │
-│ (Cloud Run Job + L4 GPU)        │
-│ - 8 vCPU, 32GB RAM              │
-│ - NVIDIA L4 (24GB VRAM)         │
-│ - PyTorch + LoRA + QLoRA        │
-│ - Gemma 2B Fine-tuning          │
-└──────┬──────────────────────────┘
- Upload Model
-       │ 
-       ▼
-┌─────────────────────────────────┐
-│ Cloud Storage Bucket            │
-│ - LoRA adapter weights          │
-│ - Tokenizer files               │
-│ - Model configs                 │
-└─────────────────────────────────┘
-```
+<p align="center">
+  <img src="./assets/architecture-google.png" alt="Content Marketing Agent – Architecture" width="1000" />
+</p>
+
 ## 📊 Technical Specifications
 
 **Training Infrastructure:**
