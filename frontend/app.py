@@ -2,7 +2,8 @@ from flask import Flask, request, jsonify
 from google.cloud import run_v2
 from google.cloud import storage
 import os
-import uuid
+import subprocess
+import json
 
 app = Flask(__name__)
 
@@ -13,7 +14,7 @@ JOB_NAME = 'lora-training-job'
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({
-        'service': 'LoRA Fine-Tuning Platform',
+        'service': 'AdaptML API',
         'version': '1.0',
         'endpoints': {
             '/': 'Service info (this page)',
@@ -25,28 +26,66 @@ def home():
 
 @app.route('/train', methods=['POST'])
 def submit_training():
-    """Submit a new LoRA training job"""
+    """Submit a new LoRA training job with custom parameters"""
     try:
-        data = request.get_json()
+        data = request.get_json() or {}
         
-        # Get parameters (with defaults)
+        # Get parameters from request (with defaults)
         model_name = data.get('model_name', 'google/gemma-2b-it')
         lora_rank = data.get('lora_rank', 16)
         num_epochs = data.get('num_epochs', 1)
         learning_rate = data.get('learning_rate', 0.0002)
         
-        # Execute Cloud Run Job
-        client = run_v2.JobsClient()
-        job_path = f"projects/{PROJECT_ID}/locations/{REGION}/jobs/{JOB_NAME}"
+        print(f"Received training request: model={model_name}, rank={lora_rank}, epochs={num_epochs}, lr={learning_rate}")
         
-        operation = client.run_job(name=job_path)
+        # Update job with new env vars using gcloud CLI
+        update_cmd = [
+            'gcloud', 'run', 'jobs', 'update', JOB_NAME,
+            '--region', REGION,
+            '--update-env-vars', f'MODEL_NAME={model_name},LORA_RANK={lora_rank},NUM_EPOCHS={num_epochs},LEARNING_RATE={learning_rate}',
+            '--format', 'json'
+        ]
         
-        # Get execution name from operation
-        execution_name = operation.metadata.name.split('/')[-1]
+        print(f"Running: {' '.join(update_cmd)}")
+        result = subprocess.run(update_cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            print(f"Update failed: {result.stderr}")
+            return jsonify({
+                'status': 'error',
+                'message': f'Failed to update job: {result.stderr}'
+            }), 500
+        
+        print("Job updated successfully")
+        
+        # Execute job using gcloud CLI
+        execute_cmd = [
+            'gcloud', 'run', 'jobs', 'execute', JOB_NAME,
+            '--region', REGION,
+            '--format', 'json'
+        ]
+        
+        print(f"Running: {' '.join(execute_cmd)}")
+        result = subprocess.run(execute_cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            print(f"Execute failed: {result.stderr}")
+            return jsonify({
+                'status': 'error',
+                'message': f'Failed to execute job: {result.stderr}'
+            }), 500
+        
+        # Parse execution name from output
+        output = json.loads(result.stdout) if result.stdout else {}
+        execution_name = output.get('metadata', {}).get('name', 'unknown')
+        if '/' in execution_name:
+            execution_name = execution_name.split('/')[-1]
+        
+        print(f"Job started with execution: {execution_name}")
         
         return jsonify({
             'status': 'success',
-            'message': 'Training job submitted',
+            'message': 'Training job submitted with custom parameters',
             'execution_id': execution_name,
             'parameters': {
                 'model_name': model_name,
@@ -58,6 +97,9 @@ def submit_training():
         }), 202
         
     except Exception as e:
+        print(f"Error submitting job: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'status': 'error',
             'message': str(e)
@@ -72,7 +114,6 @@ def check_status(execution_id):
         
         execution = client.get_execution(name=execution_path)
         
-        # Get status
         status = 'unknown'
         if execution.succeeded_count > 0:
             status = 'completed'
@@ -106,12 +147,10 @@ def list_models():
         bucket_name = f'lora-training-data-{PROJECT_ID}'
         bucket = storage_client.bucket(bucket_name)
         
-        # List all blobs in models/ directory
         blobs = bucket.list_blobs(prefix='models/')
         
         models = {}
         for blob in blobs:
-            # Group by model directory
             parts = blob.name.split('/')
             if len(parts) >= 3:
                 model_dir = parts[1]
