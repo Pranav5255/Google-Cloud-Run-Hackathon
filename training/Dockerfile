@@ -38,6 +38,13 @@ RUN python -c "from transformers import AutoModelForCausalLM, AutoTokenizer; \
     model = AutoModelForCausalLM.from_pretrained('google/gemma-2b-it', token=token, trust_remote_code=True, torch_dtype='auto', low_cpu_mem_usage=True); \
     print('Model cached successfully')"
 
+# Pre-download Alpaca dataset
+RUN python -c "from datasets import load_dataset; \
+    print('Downloading Alpaca dataset...'); \
+    dataset = load_dataset('tatsu-lab/alpaca'); \
+    print('Dataset cached successfully')"
+
+
 COPY train_lora.py .
 
 ENV CUDA_VISIBLE_DEVICES=0

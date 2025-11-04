@@ -127,9 +127,9 @@ lora-platform/
 
 ## 🎯 Hackathon Submission
 
-**Category:** GPU Category
-**Technologies:** Cloud Run Jobs, NVIDIA L4 GPU, LoRA, QLoRA, Gemma
-**Innovation:** Production-ready serverless LLM fine-tuning with cost optimization
+- **Category:** GPU Category
+- **Technologies:** Cloud Run Jobs, NVIDIA L4 GPU, LoRA, QLoRA, Gemma
+- **Innovation:** Production-ready serverless LLM fine-tuning with cost optimization
 
 ## 💰 Cost Breakdown
 

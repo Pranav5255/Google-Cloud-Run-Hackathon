@@ -1,6 +1,5 @@
 import os
 import torch
-import argparse
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -10,154 +9,113 @@ from transformers import (
 )
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from datasets import load_dataset
-from google.cloud import storage
-import wandb
-
-def parse_args():
-    parser = argparse.ArgumentParser(description="LoRA Fine-tuning on Cloud Run")
-    parser.add_argument("--model_name", type=str, default="google/gemma-2b-it",
-                        help="Base model to fine-tune")
-    parser.add_argument("--dataset_path", type=str, default="gs://lora-training-data-lora-finetuning-platform/sample_data.jsonl",
-                        help="Path to training dataset in GCS")
-    parser.add_argument("--output_path", type=str, default="gs://lora-training-data-lora-finetuning-platform/models",
-                        help="Output path for fine-tuned model")
-    parser.add_argument("--lora_rank", type=int, default=16,
-                        help="LoRA rank (r)")
-    parser.add_argument("--lora_alpha", type=int, default=32,
-                        help="LoRA alpha scaling")
-    parser.add_argument("--learning_rate", type=float, default=2e-4,
-                        help="Learning rate")
-    parser.add_argument("--num_epochs", type=int, default=3,
-                        help="Number of training epochs")
-    parser.add_argument("--batch_size", type=int, default=4,
-                        help="Training batch size")
-    parser.add_argument("--use_wandb", action="store_true",
-                        help="Enable Weights & Biases logging")
-    return parser.parse_args()
+import json
 
 def main():
-    args = parse_args()
-    
-    # Get HuggingFace token from environment and strip whitespace
-    hf_token = os.getenv("HF_TOKEN", "").strip()
-    
-    # Initialize wandb if enabled
-    if args.use_wandb:
-        wandb.init(project="lora-finetuning", config=vars(args))
+    model_name = os.getenv('MODEL_NAME', 'google/gemma-2b-it')
+    lora_rank = int(os.getenv('LORA_RANK', '16'))
+    num_epochs = int(os.getenv('NUM_EPOCHS', '1'))
+    learning_rate = float(os.getenv('LEARNING_RATE', '0.0002'))
+    hf_token = os.getenv('HF_TOKEN', '').strip()
     
     print("=" * 50)
-    print("LoRA Fine-tuning on Cloud Run with GPU")
+    print("AdaptML - LoRA Fine-tuning")
     print("=" * 50)
-    print(f"Model: {args.model_name}")
-    print(f"LoRA Rank: {args.lora_rank}")
-    print(f"Learning Rate: {args.learning_rate}")
-    print(f"Epochs: {args.num_epochs}")
-    print(f"GPU Available: {torch.cuda.is_available()}")
+    print(f"Model: {model_name}")
+    print(f"LoRA Rank: {lora_rank}")
+    print(f"Learning Rate: {learning_rate}")
+    print(f"Epochs: {num_epochs}")
+    print(f"GPU: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
-        print(f"GPU Device: {torch.cuda.get_device_name(0)}")
-        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
-    print(f"HF Token: {'Present' if hf_token else 'Missing'}")
+        print(f"Device: {torch.cuda.get_device_name(0)}")
     print("=" * 50)
     
-    # Load tokenizer with authentication - use trust_remote_code for Gemma
     print("\n[1/6] Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.model_name,
-        token=hf_token,
-        trust_remote_code=True
-    )
-    
-    # Set padding token
+    tokenizer = AutoTokenizer.from_pretrained(model_name, token=hf_token, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.pad_token_id = tokenizer.eos_token_id
     
-    # Load model with 4-bit quantization (QLoRA)
-    print("\n[2/6] Loading base model with 4-bit quantization...")
+    print("\n[2/6] Loading model...")
     model = AutoModelForCausalLM.from_pretrained(
-        args.model_name,
-        device_map="auto",
-        torch_dtype=torch.bfloat16,
-        load_in_4bit=True,
-        token=hf_token,
-        trust_remote_code=True
+        model_name, device_map="auto", torch_dtype=torch.bfloat16,
+        load_in_4bit=True, token=hf_token, trust_remote_code=True
     )
+    base_model_config = model.config.to_dict()
     
-    # Prepare model for training
-    print("\n[3/6] Preparing model for LoRA training...")
+    print("\n[3/6] Preparing for LoRA...")
     model = prepare_model_for_kbit_training(model)
     
-    # Configure LoRA
+    print(f"\n[3.5/6] Configuring LoRA (rank={lora_rank})...")
     lora_config = LoraConfig(
-        r=args.lora_rank,
-        lora_alpha=args.lora_alpha,
+        r=lora_rank, lora_alpha=lora_rank * 2,
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
-        lora_dropout=0.05,
-        bias="none",
-        task_type="CAUSAL_LM"
+        lora_dropout=0.05, bias="none", task_type="CAUSAL_LM"
     )
-    
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
     
-    # Load dataset
     print("\n[4/6] Loading dataset...")
     dataset = load_dataset("tatsu-lab/alpaca", split="train[:100]")
     
     def preprocess_function(examples):
         texts = [f"Instruction: {inst}\n\nInput: {inp}\n\nResponse: {out}" 
-                 for inst, inp, out in zip(examples["instruction"], 
-                                          examples["input"], 
-                                          examples["output"])]
+                 for inst, inp, out in zip(examples["instruction"], examples["input"], examples["output"])]
         return tokenizer(texts, truncation=True, max_length=512, padding="max_length")
     
     tokenized_dataset = dataset.map(preprocess_function, batched=True, remove_columns=dataset.column_names)
     
-    # Training arguments - DISABLE CHECKPOINTING
-    print("\n[5/6] Setting up training...")
+    print(f"\n[5/6] Training setup (lr={learning_rate}, epochs={num_epochs})...")
     training_args = TrainingArguments(
-        output_dir="./results",
-        num_train_epochs=args.num_epochs,
-        per_device_train_batch_size=args.batch_size,
-        gradient_accumulation_steps=4,
-        learning_rate=args.learning_rate,
-        fp16=False,
-        bf16=True,
-        logging_steps=5,
-        save_strategy="no",  # DISABLE AUTOMATIC SAVING
-        report_to="wandb" if args.use_wandb else "none",
-        optim="paged_adamw_8bit",
-        warmup_steps=10,
+        output_dir="./results", num_train_epochs=num_epochs,
+        per_device_train_batch_size=4, gradient_accumulation_steps=4,
+        learning_rate=learning_rate, fp16=False, bf16=True,
+        logging_steps=5, save_strategy="no", report_to="none",
+        optim="paged_adamw_8bit", warmup_steps=10,
     )
     
-    # Create trainer
     trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=tokenized_dataset,
+        model=model, args=training_args, train_dataset=tokenized_dataset,
         data_collator=DataCollatorForLanguageModeling(tokenizer, mlm=False),
     )
     
-    # Train
-    print("\n[6/6] Starting training...")
+    print("\n[6/6] Training...")
     trainer.train()
     
-    # Save model ONLY at the end - locally
-    print("\nSaving model locally...")
-    model.save_pretrained("./lora_model", safe_serialization=True)
+    # MANUALLY EXTRACT ONLY LORA WEIGHTS - NO PEFT FUNCTIONS!
+    print("\n🔒 Extracting adapter weights (offline mode)...")
+    os.makedirs("./lora_model", exist_ok=True)
+    
+    # Get full state dict and filter for LoRA params only
+    full_state_dict = model.state_dict()
+    adapter_state_dict = {k: v for k, v in full_state_dict.items() if 'lora_' in k}
+    
+    # Save only adapter weights
+    torch.save(adapter_state_dict, "./lora_model/adapter_model.bin")
+    
+    # Calculate size
+    adapter_size_mb = sum(p.numel() * p.element_size() for p in adapter_state_dict.values()) / 1024 / 1024
+    print(f"✅ Adapter size: {adapter_size_mb:.2f} MB ({len(adapter_state_dict)} tensors)")
+    
+    # Save configs
+    lora_config.save_pretrained("./lora_model")
+    with open("./lora_model/base_model_config.json", "w") as f:
+        json.dump(base_model_config, f, indent=2)
     tokenizer.save_pretrained("./lora_model")
     
-    # Upload to GCS
-    print("\nUploading model to Cloud Storage...")
-    os.system(f"gsutil -m cp -r ./lora_model {args.output_path}/")
+    print("📤 Uploading to GCS...")
+    project_id = os.getenv('PROJECT_ID', 'lora-finetuning-platform')
+    import time
+    timestamp = int(time.time())
+    model_path = f"models/lora_model_{timestamp}"
+    os.system(f"gsutil -m cp -r ./lora_model gs://lora-training-data-{project_id}/{model_path}/")
     
     print("\n" + "=" * 50)
-    print("Training completed successfully!")
-    print(f"Model saved to: {args.output_path}/lora_model")
+    print("✅ Training completed!")
+    print(f"📦 gs://lora-training-data-{project_id}/{model_path}")
+    print(f"💾 Adapter: {adapter_size_mb:.2f} MB")
+    print(f"⚙️  rank={lora_rank}, lr={learning_rate}, epochs={num_epochs}")
     print("=" * 50)
-    
-    if args.use_wandb:
-        wandb.finish()
 
 if __name__ == "__main__":
     main()
