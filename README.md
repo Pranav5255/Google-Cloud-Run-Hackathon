@@ -2,8 +2,6 @@
 
 A serverless platform for fine-tuning Large Language Models using LoRA/QLoRA on Google Cloud Run with GPU acceleration.
 
-**Live Demo:** https://lora-dashboard-906036652731.europe-west1.run.app/
-
 ## 🚀 Features
 
 - **Serverless GPU Training**: Fine-tune Gemma models with Cloud Run Jobs + L4 GPUs
